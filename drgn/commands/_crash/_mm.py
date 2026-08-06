@@ -561,6 +561,12 @@ for si in for_each_swap_info():
             help="dump all vm_area_structs associated with the task",
         ),
         argument(
+            "-p",
+            dest="p",
+            action="store_true",
+            help="translate each virtual page to its physical address",
+        ),
+        argument(
             "-x",
             dest="integer_base",
             action="store_const",
@@ -600,6 +606,37 @@ mm = task.mm.read_()
 if mm:
     for vma in for_each_vma(mm):
         pass
+"""
+                )
+            elif args.p:
+                code.add_from_import("drgn", "FaultError")
+                code.add_from_import(
+                    "drgn.helpers.linux.mm",
+                    "follow_phys",
+                    "for_each_vma",
+                    "task_rss",
+                    "vma_name",
+                )
+                code.append(
+                    """\
+page_size = prog["PAGE_SIZE"].value_()
+mm = task.mm.read_()
+if mm:
+    pgd = mm.pgd
+    rss = task_rss(task)
+    total_vm = mm.total_vm
+
+    for vma in for_each_vma(mm):
+        start = vma.vm_start
+        end = vma.vm_end
+        flags = vma.vm_flags
+        file = vma_name(vma)
+        vm_file = vma.vm_file.read_()
+        for page_addr in range(start, end, page_size):
+            try:
+                phys_addr = follow_phys(mm, page_addr)
+            except FaultError:
+                phys_addr = None
 """
                 )
             elif args.reference:
@@ -684,12 +721,77 @@ if mm:
                 print("(no mm_struct)")
             continue
 
-        if args.v:
+        elif args.v:
             if mm:
                 for vma in for_each_vma(mm):
                     print(vma[0].format_(**format_options))
             else:
                 print("(no mm_struct)")
+            continue
+
+        elif args.p:
+            if mm:
+                page_size = prog["PAGE_SIZE"].value_()
+                for vma in for_each_vma(mm):
+                    try:
+                        vma_start = vma.vm_start.value_()
+                    except FaultError:
+                        continue
+                    vma_end = vma.vm_end.value_()
+                    vm_file = vma.vm_file.read_()
+                    vm_pgoff = vma.vm_pgoff.value_() if vm_file else 0
+                    vma_name_str = vma_name(vma)
+                    print_table(
+                        (
+                            (
+                                CellFormat("VMA", "^"),
+                                CellFormat("START", "^"),
+                                CellFormat("END", "^"),
+                                CellFormat("FLAGS", "<"),
+                                CellFormat("FILE", "<"),
+                            ),
+                            (
+                                CellFormat(vma.value_(), "^x"),
+                                CellFormat(vma_start, "^x"),
+                                CellFormat(vma_end, "^x"),
+                                CellFormat(vma.vm_flags.value_(), "<x"),
+                                escape_ascii_string(
+                                    vma_name_str, escape_backslash=True
+                                ),
+                            ),
+                        )
+                    )
+                    translation_rows: List[Sequence[Any]] = [
+                        ("VIRTUAL", "PHYSICAL")
+                    ]
+                    for page_addr in range(vma_start, vma_end, page_size):
+                        try:
+                            phys_addr = follow_phys(mm, page_addr).value_()
+                            translation_rows.append(
+                                (
+                                    CellFormat(page_addr, "^x"),
+                                    CellFormat(phys_addr, "^x"),
+                                )
+                            )
+                        except FaultError:
+                            if vm_file:
+                                offset = (
+                                    page_addr - vma_start
+                                ) + vm_pgoff * page_size
+                                translation_rows.append(
+                                    (
+                                        CellFormat(page_addr, "^x"),
+                                        f"FILE: {vma_name_str.decode(errors='replace')}  OFFSET: {offset:x}",
+                                    )
+                                )
+                            else:
+                                translation_rows.append(
+                                    (
+                                        CellFormat(page_addr, "^x"),
+                                        "SWAP: (unavailable)",
+                                    )
+                                )
+                    print_table(translation_rows)
             continue
 
         if mm:
@@ -782,6 +884,12 @@ arguments are entered, the current context is used.
             dest="v",
             action="store_true",
             help="dump all vm_area_structs associated with the task",
+        ),
+        argument(
+            "-p",
+            dest="p",
+            action="store_true",
+            help="translate each virtual page to its physical address",
         ),
         argument(
             "-x",
