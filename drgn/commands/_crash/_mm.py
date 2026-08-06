@@ -574,6 +574,13 @@ for si in for_each_swap_info():
             help="translate pages belonging to the specified VM area",
         ),
         argument(
+            "-M",
+            dest="M",
+            metavar="mm",
+            type="hexadecimal",
+            help="use a manually specified mm_struct address",
+        ),
+        argument(
             "-x",
             dest="integer_base",
             action="store_const",
@@ -603,13 +610,19 @@ def _crash_foreach_vm(task_selector: _TaskSelector, args: argparse.Namespace) ->
         code = CrashDrgnCodeBuilder(prog)
         with task_selector.begin_task_loop(code):
             code.append_task_header()
-            if args.m:
+            if args.M is not None:
+                code.add_from_import("drgn", "Object")
+                code.append(
+                    f'mm = Object(prog, "struct mm_struct *", {hex(args.M)})\n'
+                )
+            else:
                 code.append("mm = task.mm.read_()\n")
+            if args.m:
+                pass
             elif args.v:
                 code.add_from_import("drgn.helpers.linux.mm", "for_each_vma")
                 code.append(
                     """\
-mm = task.mm.read_()
 if mm:
     for vma in for_each_vma(mm):
         pass
@@ -627,7 +640,6 @@ if mm:
                 code.append(
                     """\
 page_size = prog["PAGE_SIZE"].value_()
-mm = task.mm.read_()
 if mm:
     pgd = mm.pgd
     rss = task_rss(task)
@@ -657,7 +669,6 @@ if mm:
                 code.append(
                     f"""\
 page_size = prog["PAGE_SIZE"].value_()
-mm = task.mm.read_()
 if mm:
     pgd = mm.pgd
     rss = task_rss(task)
@@ -689,7 +700,6 @@ try:
     ref_num = int(ref, 16)
 except ValueError:
     ref_num = None
-mm = task.mm.read_()
 if mm:
     pgd = mm.pgd
     rss = task_rss(task)
@@ -723,7 +733,6 @@ if mm:
                 code.append(
                     """\
 
-mm = task.mm.read_()
 if mm:
     pgd = mm.pgd
     rss = task_rss(task)
@@ -749,6 +758,8 @@ if mm:
         print_task_header(task)
 
         mm = task.mm.read_()
+        if args.M is not None:
+            mm = Object(prog, "struct mm_struct *", args.M)
 
         if args.m:
             if mm:
@@ -999,6 +1010,13 @@ arguments are entered, the current context is used.
             metavar="vma",
             type="hexadecimal",
             help="translate pages belonging to the specified VM area",
+        ),
+        argument(
+            "-M",
+            dest="M",
+            metavar="mm",
+            type="hexadecimal",
+            help="use a manually specified mm_struct address",
         ),
         argument(
             "-x",
